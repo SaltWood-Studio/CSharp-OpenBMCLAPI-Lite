@@ -1,13 +1,8 @@
 ﻿using CSharpOpenBMCLAPI.Modules;
 using CSharpOpenBMCLAPI.Modules.Plugin;
 using CSharpOpenBMCLAPI.Modules.Statistician;
-using CSharpOpenBMCLAPI.Modules.WebServer;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Bson;
 using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Threading.Tasks;
 using TeraIO.Runnable;
 using YamlDotNet.Serialization;
 
@@ -99,6 +94,8 @@ namespace CSharpOpenBMCLAPI
         {
             try
             {
+                Directory.CreateDirectory(ClusterRequiredData.Config.clusterWorkingDirectory);
+                Directory.CreateDirectory("working");
                 const string bsonFile = "totals.bson";
                 string bsonFilePath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, bsonFile);
                 ClusterRequiredData.Config = GetConfig();
@@ -120,13 +117,12 @@ namespace CSharpOpenBMCLAPI
                     }
                 }
 
-                const string environment = ".env.json";
-                string environmentFile = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, environment);
+                const string environment = "working/.env.json";
 
-                if (!File.Exists(environment)) throw new FileNotFoundException($"请在程序目录下新建 {environmentFile} 文件，然后填入 \"ClusterId\" 和 \"ClusterSecret\"以启动集群！");
+                if (!File.Exists(environment)) throw new FileNotFoundException($"请在程序目录下新建 {environment} 文件，然后填入 \"ClusterId\" 和 \"ClusterSecret\"以启动集群！");
 
                 // 从 .env.json 读取密钥然后 FetchToken
-                ClusterInfo info = JsonConvert.DeserializeObject<ClusterInfo>(File.ReadAllTextAsync(environmentFile).Result);
+                ClusterInfo info = JsonConvert.DeserializeObject<ClusterInfo>(File.ReadAllTextAsync(environment).Result);
                 ClusterRequiredData requiredData = new(info);
                 Logger.Instance.LogSystem($"Cluster id: {info.ClusterID}");
                 TokenManager token = new TokenManager(info);

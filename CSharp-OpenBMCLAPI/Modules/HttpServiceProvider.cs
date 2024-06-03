@@ -1,14 +1,7 @@
-﻿using CSharpOpenBMCLAPI.Modules.Statistician;
+﻿using CSharpOpenBMCLAPI.Modules.Plugin;
 using CSharpOpenBMCLAPI.Modules.Storage;
 using CSharpOpenBMCLAPI.Modules.WebServer;
 using Newtonsoft.Json;
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
-using TeraIO.Extension;
-using TeraIO.Network.Http;
-using TeraIO.Runnable;
 
 namespace CSharpOpenBMCLAPI.Modules
 {
@@ -24,7 +17,7 @@ namespace CSharpOpenBMCLAPI.Modules
         {
             if (!ClusterRequiredData.Config.disableAccessLog)
             {
-                Logger.Instance.LogInfo($"{context.Request.Method} {context.Request.Path.Split('?').First()} <{context.Response.StatusCode}> - [{context.RemoteIPAddress}] {context.Request.Header.TryGetValue("user-agent")}");
+                Logger.Instance.LogInfo($"{context.Request.Method} {context.Request.Path.Split('?').First()} <{context.Response.StatusCode}> - [{context.RemoteIPAddress}] {context.Request.Headers.TryGetValue("user-agent")}");
             }
         }
 
@@ -35,6 +28,7 @@ namespace CSharpOpenBMCLAPI.Modules
         /// <returns></returns>
         public static async Task Measure(HttpContext context, Cluster cluster)
         {
+            PluginManager.Instance.TriggerHttpEvent(context, HttpEventType.ClientMeasure);
             var pairs = Utils.GetQueryStrings(context.Request.Path.Split('?').Last());
             bool valid = Utils.CheckSign(context.Request.Path.Split('?').First()
                 , cluster.requiredData.ClusterInfo.ClusterSecret
@@ -70,6 +64,7 @@ namespace CSharpOpenBMCLAPI.Modules
         /// <returns></returns>
         public static async Task<FileAccessInfo> DownloadHash(HttpContext context, Cluster cluster)
         {
+            PluginManager.Instance.TriggerHttpEvent(context, HttpEventType.ClientDownload);
             // 处理用户下载
             FileAccessInfo fai = default;
             var pairs = Utils.GetQueryStrings(context.Request.Path.Split('?').Last());
@@ -84,11 +79,11 @@ namespace CSharpOpenBMCLAPI.Modules
                 long from, to;
                 try
                 {
-                    if (context.Request.Header.ContainsKey("range"))
+                    if (context.Request.Headers.ContainsKey("range"))
                     {
                         // 206 处理部分
                         context.Response.StatusCode = 206;
-                        (from, to) = ToRangeByte(context.Request.Header["range"].Split("=").Last().Split("-"));
+                        (from, to) = ToRangeByte(context.Request.Headers["range"].Split("=").Last().Split("-"));
                         if (to < from && to != -1) (from, to) = (to, from);
                         long length = 0;
 
@@ -165,53 +160,45 @@ namespace CSharpOpenBMCLAPI.Modules
 
         public static async Task Api(HttpContext context, string query, Cluster cluster)
         {
+            PluginManager.Instance.TriggerHttpEvent(context, HttpEventType.ClientOtherRequest);
             context.Response.Header.Set("content-type", "application/json");
+            context.Response.Header.Set("access-control-allow-origin", "*");
             context.Response.StatusCode = 200;
             switch (query)
             {
                 case "cluster/type":
-                    await context.Response.WriteAsync(JsonConvert.SerializeObject(new 
+                    await context.Response.WriteAsync(JsonConvert.SerializeObject(new
                     {
-                        code = 200,
-                        msg = "success",
                         type = "csharp-openbmclapi",
-                        version = ClusterRequiredData.Config.clusterVersion
+                        openbmclapiVersion = ClusterRequiredData.Config.clusterVersion,
+                        version = "beta"
                     }));
                     break;
                 case "cluster/status":
                     await context.Response.WriteAsync(JsonConvert.SerializeObject(new
                     {
-                        code = 200,
-                        msg = "success",
-                        data = new
+                        isEnabled = cluster.IsEnabled,
+                        isSynchronized = true, // TODO
+                        isTrusted = true, // NOT PLANNED
+                        uptime = ClusterRequiredData.DataStatistician.Uptime,
+                        systemOccupancy = new
                         {
-                            isEnabled = cluster.IsEnabled,
-                            isSynchronized = true, //
-                            isTrusted = true,
-                            uptime = ClusterRequiredData.DataStatistician.Uptime
+                            memoryUsage = ClusterRequiredData.DataStatistician.Memory,
+                            loadAverage = ClusterRequiredData.DataStatistician.Cpu
                         }
                     }));
                     break;
                 case "cluster/info":
                     await context.Response.WriteAsync(JsonConvert.SerializeObject(new
                     {
-                        code = 200,
-                        msg = "success",
-                        data = new
-                        {
-                            name = "undefined",
-                            clusterId = cluster.requiredData.ClusterInfo.ClusterID,
-                            fullsize = true,
-                            trust = -1, // 根据 API 规范，已弃用
-                            noFastEnable = ClusterRequiredData.Config.noFastEnable
-                        }
+                        clusterId = cluster.requiredData.ClusterInfo.ClusterID,
+                        fullsize = true,
+                        noFastEnable = ClusterRequiredData.Config.noFastEnable
                     }));
                     break;
                 case "cluster/requests":
                     await context.Response.WriteAsync(JsonConvert.SerializeObject(new
                     {
-                        code = 200,
-                        msg = "success",
                         data = new
                         {
                             hours = ClusterRequiredData.DataStatistician.HourAccessData,
@@ -223,10 +210,14 @@ namespace CSharpOpenBMCLAPI.Modules
                 case "cluster/commonua":
                     await context.Response.WriteAsync(JsonConvert.SerializeObject(new
                     {
-                        code = 200,
-                        msg = "failed",
-                        data = "null"
-                    }));
+                        data = new
+                        {
+                            commonUA = new Dictionary<string, int>()
+                            {
+
+                            }
+                        }
+                    }));// TODO
                     break;
                 default:
                     context.Response.StatusCode = 404;
@@ -237,6 +228,7 @@ namespace CSharpOpenBMCLAPI.Modules
 
         public static Task Dashboard(HttpContext context, string filePath = "index.html")
         {
+            PluginManager.Instance.TriggerHttpEvent(context, HttpEventType.ClientOtherRequest);
             context.Response.StatusCode = 200;
             context.Response.Stream = Utils.GetEmbeddedFileStream($"Dashboard/{filePath}").ThrowIfNull();
             return Task.CompletedTask;

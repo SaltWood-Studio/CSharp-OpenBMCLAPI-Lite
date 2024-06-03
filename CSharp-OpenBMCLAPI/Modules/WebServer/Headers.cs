@@ -1,28 +1,23 @@
-﻿using System;
-using System.Collections;
-using System.Collections.Generic;
+﻿using System.Collections;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CSharpOpenBMCLAPI.Modules.WebServer
 {
-    public class Header : IDictionary<string, string>
+    public class Headers : IDictionary<string, string>
     {
         Dictionary<string, string> tables;
 
-        public Header(Dictionary<string, string> tables)
+        public Headers(Dictionary<string, string> tables)
         {
             this.tables = tables;
         }
 
-        public Header()
+        public Headers()
         {
             this.tables = new Dictionary<string, string>();
         }
 
-        public static Header FromBytes(byte[][] headers)
+        public static Headers FromBytes(byte[][] headers)
         {
             Dictionary<string, string> tables = new Dictionary<string, string>();
             foreach (var header in headers)
@@ -34,7 +29,7 @@ namespace CSharpOpenBMCLAPI.Modules.WebServer
                 }
                 tables.TryAdd(WebUtils.Decode(h[0]).ToLower(), WebUtils.Decode(h[1]));
             }
-            return new Header(tables);
+            return new Headers(tables);
         }
 
         public object Get(string key, object defaultValue)

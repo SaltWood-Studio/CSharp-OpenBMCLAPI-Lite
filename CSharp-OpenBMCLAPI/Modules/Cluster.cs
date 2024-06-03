@@ -2,21 +2,13 @@
 using CSharpOpenBMCLAPI.Modules.Storage;
 using CSharpOpenBMCLAPI.Modules.WebServer;
 using Newtonsoft.Json;
+using ShellProgressBar;
 using SocketIOClient;
-using System.Diagnostics;
-using System.Diagnostics.Metrics;
-using System.Drawing;
-using System.IO;
 using System.Net;
-using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using System.Security.Policy;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using TeraIO.Network.Http;
 using TeraIO.Runnable;
 using ZstdSharp;
 
@@ -51,7 +43,7 @@ namespace CSharpOpenBMCLAPI.Modules
         /// <param name="info"></param>
         /// <param name="token"></param>
         /// <exception cref="Exception"></exception>
-        public Cluster(ClusterRequiredData requiredData) : base()
+        public Cluster(ClusterRequiredData requiredData)
         {
             this.requiredData = requiredData;
             this.clusterInfo = requiredData.ClusterInfo;
@@ -61,7 +53,7 @@ namespace CSharpOpenBMCLAPI.Modules
             client = HttpRequest.client;
             client.DefaultRequestHeaders.Authorization = new("Bearer", requiredData.Token?.Token.token);
 
-            this.storage = new CachedStorage(new FileStorage(ClusterRequiredData.Config.clusterFileDirectory));
+            this.storage = new FileStorage(ClusterRequiredData.Config.clusterFileDirectory);
             this.files = new List<ApiFileInfo>();
             this.counter = new();
             InitializeSocket();
@@ -132,8 +124,6 @@ namespace CSharpOpenBMCLAPI.Modules
 
             await RequestCertification();
 
-            LoadAndConvertCert();
-
             Logger.Instance.LogInfo($"{nameof(AsyncRun)} 正在等待证书请求……");
 
             while (!ClusterRequiredData.Config.noEnable)
@@ -157,7 +147,7 @@ namespace CSharpOpenBMCLAPI.Modules
                 // 定时检查文件的 Task
                 const int time = 10 * 60 * 1000; // 10 分钟
                 bool skipCheck = ClusterRequiredData.Config.skipCheck;
-                while (true)
+                while (!skipCheck)
                 {
                     for (int i = 0; i < 36; i++)
                     {
@@ -227,7 +217,7 @@ namespace CSharpOpenBMCLAPI.Modules
             {
                 MatchRegex = new Regex(@"/api/(.*)"),
                 Handler = (context, cluster, match) => HttpServiceProvider.Api(context, match.Groups[1].Value, this).Wait(),
-                Methods = "POST"
+                Methods = "GET"
             });
 
             // 因为暂时禁用面板而注释掉
@@ -366,8 +356,7 @@ namespace CSharpOpenBMCLAPI.Modules
             await socket.EmitAsync("keep-alive",
                 (SocketIOResponse resp) =>
                 {
-                    Utils.PrintResponseMessage(resp);
-                    Logger.Instance.LogSystem($"保活成功 at {time}，served {Utils.GetLength(this.counter.bytes)}({this.counter.bytes} bytes)/{this.counter.hits} hits");
+                    _keepAliveMessageParser(resp);
                     this.counter.Reset();
                 },
                 new
@@ -386,6 +375,38 @@ namespace CSharpOpenBMCLAPI.Modules
             }
         }
 
+        private void _keepAliveMessageParser(SocketIOResponse resp)
+        {
+            try
+            {
+                var returns = resp.GetValue<List<JsonElement>>(0);
+                string? message = returns.First().GetString();
+                bool enabled = !(returns.Last().ValueKind == JsonValueKind.False);
+                if (enabled)
+                {
+                    string? time = returns.Last().GetString();
+                    Logger.Instance.LogSystem($"保活成功 at {time}，served {Utils.GetLength(this.counter.bytes)}({this.counter.bytes} bytes)/{this.counter.hits} hits");
+                }
+                else
+                {
+                    this.IsEnabled = false;
+                    if (this.WantEnable)
+                    {
+                        Logger.Instance.LogError($"保活失败：{resp}，将在 10 分钟后重新上线");
+                        Task.Run(() =>
+                        {
+                            Thread.Sleep(10 * 60 * 1000);
+                            this.Enable().Wait();
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.LogError($"未知原因导致打印 {nameof(KeepAlive)} 信息错误：{ex.GetType().Name}");
+            }
+        }
+
         /// <summary>
         /// 获取 Configuration
         /// </summary>
@@ -396,7 +417,8 @@ namespace CSharpOpenBMCLAPI.Modules
             var content = await resp.Content.ReadAsStringAsync();
             this.Configuration = JsonConvert.DeserializeObject<Configuration>(content);
             Logger.Instance.LogDebug($"同步策略：{this.Configuration.Sync.Source}，线程数：{this.Configuration.Sync.Concurrency}");
-            this.requiredData.SemaphoreSlim = new SemaphoreSlim(Math.Max(ClusterRequiredData.Config.downloadFileThreads, this.Configuration.Sync.Concurrency));
+            this.requiredData.maxThreadCount = Math.Max(ClusterRequiredData.Config.downloadFileThreads, this.Configuration.Sync.Concurrency);
+            this.requiredData.SemaphoreSlim = new SemaphoreSlim(this.requiredData.maxThreadCount);
         }
 
         /// <summary>
@@ -423,18 +445,24 @@ namespace CSharpOpenBMCLAPI.Modules
             }
 
             object countLock = new();
-            int count = 0;
 
-            //Parallel.ForEach(files, file =>
-            foreach (var file in files)
+            var options = new ProgressBarOptions
+            {
+                ProgressCharacter = '─',
+                ProgressBarOnBottom = true,
+                ShowEstimatedDuration = true
+            };
+            using var pbar = new ProgressBar(files.Count, "Check files", options);
+
+            Parallel.ForEach(files, file =>
+            //foreach (var file in files)
             {
                 CheckSingleFile(file);
                 lock (countLock)
                 {
-                    count++;
+                    pbar.Tick($"Threads: {requiredData.maxThreadCount - requiredData.SemaphoreSlim.CurrentCount}/{requiredData.maxThreadCount}");
                 }
-                Logger.Instance.LogInfoNoNewLine($"\r{count}/{files.Count}");
-            }//);
+            });
 
             files = null!;
             countLock = null!;
@@ -448,7 +476,7 @@ namespace CSharpOpenBMCLAPI.Modules
         {
             HttpResponseMessage resp;
             resp = await this.client.GetAsync("openbmclapi/files");
-            Logger.Instance.LogDebug($"检查文件结果：{resp}");
+            Logger.Instance.LogDebug($"检查文件结果：{resp.StatusCode}");
 
             List<ApiFileInfo> files;
 
@@ -511,11 +539,10 @@ namespace CSharpOpenBMCLAPI.Modules
             string path = file.path;
             string hash = file.hash;
             long size = file.size;
-            DownloadFile(hash, path).Wait();
+            DownloadFile(hash, path, false).Wait();
             bool valid = VerifyFile(hash, size, mode);
             if (!valid)
             {
-                Logger.Instance.LogWarn($"文件 {path} 损坏！期望哈希值为 {hash}");
                 DownloadFile(hash, path, true).Wait();
             }
         }
@@ -579,8 +606,8 @@ namespace CSharpOpenBMCLAPI.Modules
             try
             {
                 var resp = await this.client.GetAsync($"openbmclapi/download/{hash}");
-                this.storage.WriteFile(Utils.HashToFileName(hash), await resp.Content.ReadAsByteArrayAsync());
-                Logger.Instance.LogDebug($"文件 {path} 下载成功");
+                this.storage.WriteFileStream(Utils.HashToFileName(hash), await resp.Content.ReadAsStreamAsync());
+                resp = null!;
             }
             catch (Exception ex)
             {
@@ -605,10 +632,14 @@ namespace CSharpOpenBMCLAPI.Modules
                 Logger.Instance.LogDebug($"{nameof(ClusterRequiredData.Config.bringYourOwnCertficate)} 为 true，跳过请求证书……");
                 return;
             }
+            string certPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/cert.pem");
+            string keyPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/key.pem");
+            string pfxPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/cert.pfx");
+            if (File.Exists(pfxPath)) File.Delete(pfxPath);
+            Directory.CreateDirectory(Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications"));
             await socket.EmitAsync("request-cert", (SocketIOResponse resp) =>
             {
                 var data = resp;
-                //Debugger.Break();
                 var json = data.GetValue<JsonElement>(0)[1];
                 JsonElement cert; json.TryGetProperty("cert", out cert);
                 JsonElement key; json.TryGetProperty("key", out key);
@@ -616,10 +647,8 @@ namespace CSharpOpenBMCLAPI.Modules
                 string? certString = cert.GetString();
                 string? keyString = key.GetString();
 
-                string certPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/cert.pem");
-                string keyPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/key.pem");
-
-                Directory.CreateDirectory(Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications"));
+                File.Delete(certPath);
+                File.Delete(keyPath);
 
                 using (var file = File.Create(certPath))
                 {
@@ -630,6 +659,8 @@ namespace CSharpOpenBMCLAPI.Modules
                 {
                     if (keyString != null) file.Write(Encoding.UTF8.GetBytes(keyString));
                 }
+
+                Logger.Instance.LogDebug($"获取证书成功！");
             });
         }
     }

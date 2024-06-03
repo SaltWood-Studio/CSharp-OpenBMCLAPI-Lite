@@ -1,16 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using TeraIO.Extension;
+﻿using System.Text;
 
 namespace CSharpOpenBMCLAPI.Modules.WebServer
 {
     public class Response
     {
         public int StatusCode { get; set; } = 200;
-        public Header Header { get; set; } = new Header();
+        public Headers Header { get; set; } = new Headers();
         public Stream Stream { get; set; } = new MemoryStream();
 
         public async Task Call(Client client, Request request)
