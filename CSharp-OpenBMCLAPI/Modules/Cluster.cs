@@ -1,5 +1,4 @@
-﻿using CSharpOpenBMCLAPI.Modules.Plugin;
-using CSharpOpenBMCLAPI.Modules.Storage;
+﻿using CSharpOpenBMCLAPI.Modules.Storage;
 using CSharpOpenBMCLAPI.Modules.WebServer;
 using Newtonsoft.Json;
 using ShellProgressBar;
@@ -93,12 +92,10 @@ namespace CSharpOpenBMCLAPI.Modules
         /// <returns></returns>
         public int Start()
         {
-            requiredData.PluginManager.TriggerEvent(this, ProgramEventType.ClusterStarted);
             // 工作进程启动
             Logger.Instance.LogSystem($"工作进程 {guid} 已启动");
             Task<int> task = AsyncRun();
             task.Wait();
-            requiredData.PluginManager.TriggerEvent(this, ProgramEventType.ClusterStopped);
             return task.Result;
         }
 

@@ -1,5 +1,4 @@
 ﻿using CSharpOpenBMCLAPI.Modules;
-using CSharpOpenBMCLAPI.Modules.Plugin;
 using CSharpOpenBMCLAPI.Modules.Statistician;
 using Newtonsoft.Json;
 using System.Reflection;
@@ -22,42 +21,7 @@ namespace CSharpOpenBMCLAPI
             program.WaitForStop();
         }
 
-        protected void LoadPlugins()
-        {
-            string path = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, "plugins");
 
-            Directory.CreateDirectory(path);
-
-            foreach (var file in Directory.GetFiles(path))
-            {
-                if (!file.EndsWith(".dll")) continue;
-                try
-                {
-                    Assembly assembly = Assembly.LoadFrom(file);
-                    foreach (var type in assembly.GetTypes())
-                    {
-                        Type? parent = type;
-                        while (parent != null)
-                        {
-                            if (parent == typeof(PluginBase))
-                            {
-                                PluginAttribute? attr = type.GetCustomAttribute<PluginAttribute>();
-                                if (attr == null || !attr.Hidden)
-                                {
-                                    PluginManager.Instance.RegisterPlugin(type);
-                                }
-                                break;
-                            }
-                            parent = parent.BaseType;
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Instance.LogError($"跳过加载插件 {Path.Combine(file)}。加载插件时出现未知错误。\n", Utils.ExceptionToDetail(ex));
-                }
-            }
-        }
 
         protected Config GetConfig()
         {
@@ -99,8 +63,6 @@ namespace CSharpOpenBMCLAPI
                 const string bsonFile = "totals.bson";
                 string bsonFilePath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, bsonFile);
                 ClusterRequiredData.Config = GetConfig();
-                LoadPlugins();
-                PluginManager.Instance.TriggerEvent(this, ProgramEventType.ProgramStarted);
 
                 int returns = 0;
 
@@ -137,7 +99,6 @@ namespace CSharpOpenBMCLAPI
 
                 cluster.Start();
 
-                requiredData.PluginManager.TriggerEvent(this, ProgramEventType.ProgramStopped);
                 return returns;
             }
             catch (Exception ex)
