@@ -15,11 +15,6 @@ namespace CSharpOpenBMCLAPI.Modules.Storage
         public FileStorage(string workingDirectory)
         {
             this.workingDirectory = workingDirectory;
-            if (workingDirectory.StartsWith(@"\\"))
-            {
-                StorageUser user = ClusterRequiredData.Config.storageUser;
-                this.connection = new SambaConnection(user.UserName, user.Password, Regex.Match(workingDirectory, @"\\\\(.*?)\\").Groups[1].Value);
-            }
         }
 
         public bool Exists(string hashPath)
