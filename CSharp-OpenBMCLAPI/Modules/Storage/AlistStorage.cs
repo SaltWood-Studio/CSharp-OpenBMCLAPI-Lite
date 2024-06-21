@@ -10,13 +10,7 @@ namespace CSharpOpenBMCLAPI.Modules.Storage
         protected string baseAddr;
         protected StorageUser user;
 
-        public AlistStorage()
-        {
-            this.client = new HttpClient();
-            this.baseAddr = "BMCLAPI/cache";
-            this.client.BaseAddress = new Uri(ClusterRequiredData.Config.clusterFileDirectory);
-            this.user = ClusterRequiredData.Config.storageUser;
-        }
+
 
         public bool Exists(string hashPath)
         {
