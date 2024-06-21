@@ -23,17 +23,12 @@ namespace CSharpOpenBMCLAPI
 
 
 
-        // 获取配置文件
         protected Config GetConfig()
         {
-            // 配置文件名
             const string configFileName = "config.yml";
-            // 配置文件路径
             string configPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, configFileName);
-            // 如果配置文件不存在
             if (!File.Exists(configPath))
             {
-                // 创建配置文件
                 Config config = new Config();
                 Serializer serializer = new Serializer();
                 File.WriteAllText(configPath, serializer.Serialize(config));
@@ -41,13 +36,10 @@ namespace CSharpOpenBMCLAPI
             }
             else
             {
-                // 读取配置文件
                 string file = File.ReadAllText(configPath);
                 Deserializer deserializer = new Deserializer();
-                // 反序列化配置文件
                 Config? config = deserializer.Deserialize<Config>(file);
                 Config result;
-                // 如果反序列化失败
                 if (config != null)
                 {
                     result = config;
@@ -57,7 +49,6 @@ namespace CSharpOpenBMCLAPI
                     result = new Config();
                 }
                 Serializer serializer = new Serializer();
-                // 重新序列化配置文件
                 File.WriteAllText(configPath, serializer.Serialize(config));
                 return result;
             }
