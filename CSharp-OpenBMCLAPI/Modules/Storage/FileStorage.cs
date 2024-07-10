@@ -10,7 +10,6 @@ namespace CSharpOpenBMCLAPI.Modules.Storage
     {
         protected string workingDirectory;
         public string CacheDirectory { get => workingDirectory; }
-        private SambaConnection? connection;
 
         public FileStorage(string workingDirectory)
         {

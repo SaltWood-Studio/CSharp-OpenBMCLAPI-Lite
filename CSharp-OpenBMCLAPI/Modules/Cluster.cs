@@ -209,30 +209,6 @@ namespace CSharpOpenBMCLAPI.Modules
                 Handler = (context, cluster, match) => HttpServiceProvider.Measure(context, cluster).Wait()
             });
 
-            // API 数据
-            server.routes.Add(new Route
-            {
-                MatchRegex = new Regex(@"/api/(.*)"),
-                Handler = (context, cluster, match) => HttpServiceProvider.Api(context, match.Groups[1].Value, this).Wait(),
-                Methods = "GET"
-            });
-
-            // 因为暂时禁用面板而注释掉
-
-            // JS 文件提供
-            // server.routes.Add(new Route
-            // {
-            //     MatchRegex = new Regex(@"/static/js/(.*)"),
-            //     Handler = (context, cluster, match) => HttpServiceProvider.Dashboard(context, $"static/js/{match.Groups[1].Value}").Wait()
-            // });
-
-            // 面板
-            // server.routes.Add(new Route
-            // {
-            //     MatchRegex = new Regex(@"/"),
-            //     Handler = (context, cluster, match) => HttpServiceProvider.Dashboard(context).Wait()
-            // });
-
             server.Start();
         }
 
@@ -362,14 +338,6 @@ namespace CSharpOpenBMCLAPI.Modules
                     hits = this.counter.hits,
                     bytes = this.counter.bytes
                 });
-
-            using (var file = File.Create("totals.bson"))
-            {
-                lock (ClusterRequiredData.DataStatistician)
-                {
-                    file.Write(Utils.BsonSerializeObject(ClusterRequiredData.DataStatistician));
-                }
-            }
         }
 
         private void _keepAliveMessageParser(SocketIOResponse resp)

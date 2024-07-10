@@ -113,13 +113,11 @@ namespace CSharpOpenBMCLAPI.Modules
                             hits = 1,
                             bytes = length
                         };
-                        ClusterRequiredData.DataStatistician.DownloadCount(fai);
                     }
                     else
                     {
                         fai = await cluster.storage.HandleRequest(Utils.HashToFileName(hash), context);
                         context.Response.ResetStreamPosition();
-                        ClusterRequiredData.DataStatistician.DownloadCount(fai);
                     }
                 }
                 catch (Exception ex)
@@ -153,73 +151,6 @@ namespace CSharpOpenBMCLAPI.Modules
             else
                 to = Convert.ToInt32(rangeHeader?.LastOrDefault());
             return (from, to);
-        }
-
-        public static async Task Api(HttpContext context, string query, Cluster cluster)
-        {
-            context.Response.Header.Set("content-type", "application/json");
-            context.Response.Header.Set("access-control-allow-origin", "*");
-            context.Response.StatusCode = 200;
-            switch (query)
-            {
-                case "cluster/type":
-                    await context.Response.WriteAsync(JsonConvert.SerializeObject(new
-                    {
-                        type = "csharp-openbmclapi",
-                        openbmclapiVersion = ClusterRequiredData.Config.clusterVersion,
-                        version = "beta"
-                    }));
-                    break;
-                case "cluster/status":
-                    await context.Response.WriteAsync(JsonConvert.SerializeObject(new
-                    {
-                        isEnabled = cluster.IsEnabled,
-                        isSynchronized = true, // TODO
-                        isTrusted = true, // NOT PLANNED
-                        uptime = ClusterRequiredData.DataStatistician.Uptime,
-                        systemOccupancy = new
-                        {
-                            memoryUsage = ClusterRequiredData.DataStatistician.Memory,
-                            loadAverage = ClusterRequiredData.DataStatistician.Cpu
-                        }
-                    }));
-                    break;
-                case "cluster/info":
-                    await context.Response.WriteAsync(JsonConvert.SerializeObject(new
-                    {
-                        clusterId = cluster.requiredData.ClusterInfo.ClusterID,
-                        fullsize = true,
-                        noFastEnable = ClusterRequiredData.Config.noFastEnable
-                    }));
-                    break;
-                case "cluster/requests":
-                    await context.Response.WriteAsync(JsonConvert.SerializeObject(new
-                    {
-                        data = new
-                        {
-                            hours = ClusterRequiredData.DataStatistician.HourAccessData,
-                            days = ClusterRequiredData.DataStatistician.DayAccessData,
-                            months = ClusterRequiredData.DataStatistician.MonthAccessData
-                        }
-                    }));
-                    break;
-                case "cluster/commonua":
-                    await context.Response.WriteAsync(JsonConvert.SerializeObject(new
-                    {
-                        data = new
-                        {
-                            commonUA = new Dictionary<string, int>()
-                            {
-
-                            }
-                        }
-                    }));// TODO
-                    break;
-                default:
-                    context.Response.StatusCode = 404;
-                    break;
-            }
-            context.Response.ResetStreamPosition();
         }
 
         public static Task Dashboard(HttpContext context, string filePath = "index.html")
