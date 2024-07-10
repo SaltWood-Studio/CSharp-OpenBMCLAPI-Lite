@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using ShellProgressBar;
 using SocketIOClient;
 using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
@@ -121,18 +122,6 @@ namespace CSharpOpenBMCLAPI.Modules
 
             await RequestCertification();
 
-            Logger.Instance.LogInfo($"{nameof(AsyncRun)} 正在等待证书请求……");
-
-            while (!ClusterRequiredData.Config.noEnable)
-            {
-                if (File.Exists(Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/key.pem")) &&
-                    File.Exists(Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/cert.pem")))
-                {
-                    break;
-                }
-                Thread.Sleep(200);
-            }
-
             InitializeService();
 
             if (!ClusterRequiredData.Config.noEnable) await Enable();
@@ -151,12 +140,12 @@ namespace CSharpOpenBMCLAPI.Modules
                         cancellationSrc.Token.ThrowIfCancellationRequested();
                         Thread.Sleep(time);
                         cancellationSrc.Token.ThrowIfCancellationRequested();
-                        CheckFiles(skipCheck, FileVerificationMode.SizeOnly).Wait();
+                        FetchFiles(skipCheck, FileVerificationMode.SizeOnly).Wait();
                     }
                     cancellationSrc.Token.ThrowIfCancellationRequested();
                     Thread.Sleep(time);
                     cancellationSrc.Token.ThrowIfCancellationRequested();
-                    CheckFiles(skipCheck, FileVerificationMode.Hash).Wait();
+                    FetchFiles(skipCheck, FileVerificationMode.Hash).Wait();
                 }
             }, cancellationSrc.Token);
 
@@ -425,7 +414,48 @@ namespace CSharpOpenBMCLAPI.Modules
                 CheckSingleFile(file);
                 lock (countLock)
                 {
-                    pbar.Tick($"Threads: {requiredData.maxThreadCount - requiredData.SemaphoreSlim.CurrentCount}/{requiredData.maxThreadCount}");
+                    pbar.Tick($"Threads: {requiredData.maxThreadCount - requiredData.SemaphoreSlim.CurrentCount}/{requiredData.maxThreadCount}, Files: {pbar.CurrentTick}/{files.Count}");
+                }
+            });
+
+            files = null!;
+            countLock = null!;
+        }
+
+        /// <summary>
+        /// 获取文件列表、检查文件、下载文件部分
+        /// </summary>
+        /// <returns></returns>
+        protected async Task FetchFiles(bool skipCheck, FileVerificationMode mode)
+        {
+            if (skipCheck || mode == FileVerificationMode.None)
+            {
+                return;
+            }
+            Logger.Instance.LogDebug($"文件检查策略：{mode}");
+            var updatedFiles = await GetFileList(this.files);
+            if (updatedFiles != null && updatedFiles.Count != 0)
+            {
+                this.files = updatedFiles;
+            }
+
+            object countLock = new();
+
+            var options = new ProgressBarOptions
+            {
+                ProgressCharacter = '─',
+                ProgressBarOnBottom = true,
+                ShowEstimatedDuration = true
+            };
+            using var pbar = new ProgressBar(files.Count, "Fetch files", options);
+
+            Parallel.ForEach(files, file =>
+            //foreach (var file in files)
+            {
+                FetchFileFromCenter(file.hash).Wait();
+                lock (countLock)
+                {
+                    pbar.Tick($"Threads: {requiredData.maxThreadCount - requiredData.SemaphoreSlim.CurrentCount}/{requiredData.maxThreadCount}, Files: {pbar.CurrentTick}/{files.Count}");
                 }
             });
 
@@ -504,7 +534,6 @@ namespace CSharpOpenBMCLAPI.Modules
             string path = file.path;
             string hash = file.hash;
             long size = file.size;
-            DownloadFile(hash, path, false).Wait();
             bool valid = VerifyFile(hash, size, mode);
             if (!valid)
             {
@@ -559,7 +588,7 @@ namespace CSharpOpenBMCLAPI.Modules
         /// <param name="path"></param>
         /// <param name="force"></param>
         /// <returns></returns>
-        private async Task DownloadFile(string hash, string path, bool force = false)
+        internal async Task FetchFileFromCenter(string hash, bool force = false)
         {
             string filePath = Utils.HashToFileName(hash);
             if (this.storage.Exists(filePath) && !force)
@@ -574,9 +603,89 @@ namespace CSharpOpenBMCLAPI.Modules
                 this.storage.WriteFileStream(Utils.HashToFileName(hash), await resp.Content.ReadAsStreamAsync());
                 resp = null!;
             }
+            catch (Exception) { }
+            finally
+            {
+                this.requiredData.SemaphoreSlim.Release();
+            }
+        }
+
+        internal (HttpResponseMessage?, List<string>) GetRedirectUrls(string url)
+        {
+            var redirectUrls = new List<string>();
+            HttpResponseMessage? response = null;
+            HttpClient requestClient = new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false
+            });
+
+            try
+            {
+                string currentUrl = url;
+                while (true)
+                {
+                    HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, currentUrl);
+
+                    response = requestClient.Send(request);
+
+                    // 检查响应状态码
+                    if ((int)response.StatusCode >= 300 && (int)response.StatusCode < 400)
+                    {
+                        // 获取重定向的URL
+                        response.Headers.TryGetValues("Location", out IEnumerable<string>? _values);
+                        string? redirectUrl = _values?.FirstOrDefault();
+                        if (string.IsNullOrEmpty(redirectUrl))
+                        {
+                            break;
+                        }
+
+                        redirectUrls.Add(redirectUrl);
+                        currentUrl = redirectUrl; // 更新URL以继续跟踪重定向
+                    }
+                    else
+                    {
+                        // 如果不是3xx状态码，返回最终的响应
+                        break;
+                    }
+                }
+                return (response, redirectUrls);
+            }
+            catch { }
+            return (response, redirectUrls);
+        }
+
+        /// <summary>
+        /// 根据哈希值从主控拉取文件
+        /// </summary>
+        /// <param name="hash"></param>
+        /// <param name="force"></param>
+        /// <returns></returns>
+        internal async Task DownloadFile(string hash, string path, bool force = false)
+        {
+            string filePath = Utils.HashToFileName(hash);
+            if (this.storage.Exists(filePath) && !force)
+            {
+                return;
+            }
+
+            this.requiredData.SemaphoreSlim.Wait();
+            HttpResponseMessage? resp = null;
+            List<string> urls = new List<string>();
+            try
+            {
+                (resp, urls) = GetRedirectUrls($"https://bmclapi2.bangbang93.com{path}");
+            }
             catch (Exception ex)
             {
-                Logger.Instance.LogError($"文件 {path} 下载失败：{ex.ExceptionToDetail()}");
+                try
+                {
+                    await this.client.PostAsJsonAsync("openbmclapi/report", new
+                    {
+                        urls = urls,
+                        error = ex.ExceptionToDetail()
+                    });
+                }
+                catch { }
             }
             finally
             {
@@ -599,8 +708,7 @@ namespace CSharpOpenBMCLAPI.Modules
             }
             string certPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/cert.pem");
             string keyPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/key.pem");
-            string pfxPath = Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications/cert.pfx");
-            if (File.Exists(pfxPath)) File.Delete(pfxPath);
+
             Directory.CreateDirectory(Path.Combine(ClusterRequiredData.Config.clusterWorkingDirectory, $"certifications"));
             await socket.EmitAsync("request-cert", (SocketIOResponse resp) =>
             {
@@ -611,9 +719,6 @@ namespace CSharpOpenBMCLAPI.Modules
 
                 string? certString = cert.GetString();
                 string? keyString = key.GetString();
-
-                File.Delete(certPath);
-                File.Delete(keyPath);
 
                 using (var file = File.Create(certPath))
                 {
